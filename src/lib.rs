@@ -1,5 +1,8 @@
 
 extern crate byteorder;
+#[macro_use] 
+extern crate log;
+extern crate env_logger;
 
 use byteorder::LittleEndian;
 use byteorder::WriteBytesExt;
@@ -9,6 +12,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::io::Read;
 use std::fmt;
+
 
 pub struct U64ObjectBuilder {
     map: BTreeMap<u64, Value>,
@@ -235,6 +239,7 @@ fn pad(f: &mut fmt::Formatter, spaces: usize) -> fmt::Result {
     Ok(())
 }
 
+
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt_internal(self, f, 0)
@@ -244,13 +249,14 @@ impl fmt::Display for Value {
 pub fn from_bytes <R: Read>(read: &mut R) -> Result<Value, ()> {
     let magic = MAGIC.as_bytes();
     let mut buf:[u8; 8] = [0; 8];
-    
-    read.read_exact(&mut buf).unwrap(); // TODO better error
+    debug!("reading bytes");
+        read.read_exact(&mut buf).unwrap(); // TODO better error
     for pos in 0..MAGIC.len() {
         if magic[pos] != buf[pos] {
             return Err(())
         }
     }
+    debug!("read magic");
     from_bytes_internal_r(read)
 }
 
@@ -260,39 +266,51 @@ fn from_bytes_internal_r<R: Read>(read: &mut R) -> Result<Value, ()> {
 
     match type_buf[0] {
         START_U64 => {
+            debug!("START_U64");
             let mut u64_buf:[u8; 8] = [0; 8];
             read.read_exact(&mut u64_buf).unwrap(); // TODO better error
             let value = LittleEndian::read_u64(&u64_buf);
 
             return Ok(Value::U64(value))
         },
+        START_F64 => {
+            debug!("START_F64");
+            let mut f64_buf:[u8; 8] = [0; 8];
+            read.read_exact(&mut f64_buf).unwrap(); // TODO better error
+            let value = LittleEndian::read_f64(&f64_buf);
+
+            return Ok(Value::F64(value))
+        }
         START_CHAR_SEQ => {
+            debug!("START_CHARSEQ");
             let mut len_buf:[u8; 8] = [0; 8];
-            read.read_exact(&mut len_buf).unwrap();
+            read.read_exact(&mut len_buf).unwrap(); // TODO better error
             let len = LittleEndian::read_u64(&len_buf);
 
             let mut str_buf: Vec<u8> = Vec::new();
             let mut small_buf:[u8; 1] = [0; 1];
             for _ in 0..len {
-                read.read_exact(&mut small_buf).unwrap();
+                read.read_exact(&mut small_buf).unwrap(); // TODO better error
                 str_buf.push(small_buf[0]);
             }
-            let s = String::from_utf8(str_buf).unwrap();
+            let s = String::from_utf8(str_buf).unwrap(); // TODO better error
 
             Ok(Value::CharSeq(s))
         },
         START_U64_OBJ => {
+            debug!("START_U64_OBJ");
             let mut map = BTreeMap::new();
 
             loop {
                 let mut key_type:[u8; 1] = [0; 1];
-                read.read_exact(&mut key_type).unwrap();
+                read.read_exact(&mut key_type).unwrap(); // TODO better error
                 if key_type[0] == START_U64 {
                     let mut key_buf:[u8; 8] = [0; 8];
-                    read.read_exact(&mut key_buf).unwrap();
+                    read.read_exact(&mut key_buf).unwrap(); // TODO better error
                     let key = LittleEndian::read_u64(&key_buf);
-                    let value = from_bytes_internal_r(read);
-                    map.insert(key, value.unwrap());
+                    let value = from_bytes_internal_r(read).unwrap();
+                    debug!("U64 {},{}", key, value);
+                    map.insert(key, value);
                 } else if key_type[0] == END_OBJ {
                     break;
                 } else {
@@ -303,32 +321,44 @@ fn from_bytes_internal_r<R: Read>(read: &mut R) -> Result<Value, ()> {
             Ok(Value::U64Object(map))
         },
         START_CHAR_SEQ_OBJ => {
+            debug!("START_CHAR_SEQ_OBJ");
             let mut map = BTreeMap::new();
 
             loop {
                 let mut key_type:[u8; 1] = [0; 1];
-                read.read_exact(&mut key_type).unwrap();
-                if key_type[0] == START_CHAR_SEQ_OBJ {
-                    let key_value = from_bytes_internal_r(read).unwrap();
-                    let key = match key_value {
-                        Value::CharSeq(s) => s,
-                        _ => {panic!();}
-                    };
+                read.read_exact(&mut key_type).unwrap(); // TODO better error
 
-                    let value = from_bytes_internal_r(read).unwrap();
 
-                    map.insert(key, value);
+                // would need to peek and see if it is an "END" or not.
+                debug!("START_CHAR_SEQ_OBJ {}", key_type[0]);
+                if key_type[0] == START_CHAR_SEQ {
+                    // TOTALLY LIFTED THIS FROM ELSEWHERE
+                    let mut len_buf:[u8; 8] = [0; 8];
+                    read.read_exact(&mut len_buf).unwrap(); // TODO better error
+                    let len = LittleEndian::read_u64(&len_buf);
+
+                    let mut str_buf: Vec<u8> = Vec::new();
+                    let mut small_buf:[u8; 1] = [0; 1];
+                    for _ in 0..len {
+                        read.read_exact(&mut small_buf).unwrap(); // TODO better error
+                        str_buf.push(small_buf[0]);
+                    }
+                    let s = String::from_utf8(str_buf).unwrap(); // TODO better error
+                    debug!("key:{}", s);
+                    let value = from_bytes_internal_r(read).unwrap(); // TODO better error
+                    debug!("found str and value {} {}", s, value);
+                    map.insert(s, value);
                 } else if key_type[0] == END_OBJ {
                     break;
                 } else {
-                    panic!();
+                    panic!(); // TODO better error
                 }
             }
 
             Ok(Value::CharSeqObject(map))
         },
-        _ => {
-            panic!();
+        x => {
+            panic!("unexpected message {}", x);
         }        
     } 
 }
@@ -472,5 +502,25 @@ mod tests {
         write(&v, &mut buf);
 
         
+    }
+
+    #[test]
+    fn ser() {
+        env_logger::init().unwrap();
+
+        let mut data = std::collections::BTreeMap::new();
+        for cnt in 0..10 {
+            let mut rec:std::collections::BTreeMap<String,Value> = std::collections::BTreeMap::new();
+            rec.insert("temperature".to_string(), Value::F64(1.0));
+            rec.insert("humidity".to_string(), Value::F64(2.0));
+            data.insert(cnt as u64, Value::CharSeqObject(rec));
+        }
+        
+        let v = Value::U64Object(data);
+
+        let mut buf = Vec::new();
+        write(&v, &mut buf);
+
+        let v2 = from_bytes(&mut Cursor::new(&buf)).unwrap();
     }
 }
